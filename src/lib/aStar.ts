@@ -1,11 +1,15 @@
 import type { RoadGraph } from './osm'
 import { haversineDistance } from './geo'
 
+export type Scores = { g: number; h: number; f: number }
+
 export type AStarFrame = {
   currentId: string
   openIds: string[]
   closedIds: string[]
   pathIds: string[]
+  cameFrom: Record<string, string>
+  scores: Record<string, Scores>
 }
 
 export type AStarResult = {
@@ -23,6 +27,29 @@ export function runAStar(graph: RoadGraph, startId: string, goalId: string): ASt
   const fScore = new Map<string, number>([[startId, estimate(graph, startId, goalId)]])
   const frames: AStarFrame[] = []
 
+  const captureFrame = (currentId: string, path: string[]): AStarFrame => {
+    const scores: Record<string, Scores> = {}
+    for (const id of openSet) {
+      const g = gScore.get(id) ?? Number.POSITIVE_INFINITY
+      const f = fScore.get(id) ?? Number.POSITIVE_INFINITY
+      scores[id] = { g, h: estimate(graph, id, goalId), f }
+    }
+    for (const id of closedSet) {
+      const g = gScore.get(id) ?? Number.POSITIVE_INFINITY
+      const f = fScore.get(id) ?? Number.POSITIVE_INFINITY
+      scores[id] = { g, h: estimate(graph, id, goalId), f }
+    }
+
+    return {
+      currentId,
+      openIds: Array.from(openSet),
+      closedIds: Array.from(closedSet),
+      pathIds: path,
+      cameFrom: Object.fromEntries(cameFrom),
+      scores,
+    }
+  }
+
   while (openSet.size > 0) {
     const currentId = pickLowestScore(openSet, fScore)
     if (!currentId) {
@@ -31,12 +58,7 @@ export function runAStar(graph: RoadGraph, startId: string, goalId: string): ASt
 
     if (currentId === goalId) {
       const path = reconstructPath(cameFrom, currentId)
-      frames.push({
-        currentId,
-        openIds: Array.from(openSet),
-        closedIds: Array.from(closedSet),
-        pathIds: path,
-      })
+      frames.push(captureFrame(currentId, path))
 
       return {
         frames,
@@ -49,8 +71,12 @@ export function runAStar(graph: RoadGraph, startId: string, goalId: string): ASt
     openSet.delete(currentId)
     closedSet.add(currentId)
 
+    let neighborsChecked = 0
+    let neighborsAdded = 0
+
     const currentNode = graph.nodes[currentId]
     for (const neighbor of currentNode.neighbors) {
+      neighborsChecked++
       if (closedSet.has(neighbor.to)) {
         continue
       }
@@ -61,18 +87,14 @@ export function runAStar(graph: RoadGraph, startId: string, goalId: string): ASt
         continue
       }
 
+      neighborsAdded++
       cameFrom.set(neighbor.to, currentId)
       gScore.set(neighbor.to, tentativeScore)
       fScore.set(neighbor.to, tentativeScore + estimate(graph, neighbor.to, goalId))
       openSet.add(neighbor.to)
     }
 
-    frames.push({
-      currentId,
-      openIds: Array.from(openSet),
-      closedIds: Array.from(closedSet),
-      pathIds: reconstructPath(cameFrom, currentId),
-    })
+    frames.push(captureFrame(currentId, reconstructPath(cameFrom, currentId)))
   }
 
   return {

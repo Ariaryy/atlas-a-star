@@ -1,7 +1,8 @@
-import { startTransition, useDeferredValue, useEffect, useEffectEvent, useMemo, useState } from 'react'
+import { startTransition, useDeferredValue, useEffect, useCallback, useMemo, useState } from 'react'
 import 'leaflet/dist/leaflet.css'
 import './App.css'
 import { MapCanvas } from './components/MapCanvas'
+import { TreeCanvas } from './components/TreeCanvas'
 import { REGION_PRESETS } from './data/regions'
 import { runAStar } from './lib/aStar'
 import { snapToNearestNode, type RoadGraph, fetchRoadGraph } from './lib/osm'
@@ -78,7 +79,7 @@ function App() {
   const currentFrame = result?.frames[frameIndex] ?? null
   const deferredFrame = useDeferredValue(currentFrame)
 
-  const tickPlayback = useEffectEvent(() => {
+  const tickPlayback = useCallback(() => {
     if (!result) {
       return
     }
@@ -93,7 +94,7 @@ function App() {
         return current + 1
       })
     })
-  })
+  }, [result])
 
   useEffect(() => {
     if (!isPlaying || !result || result.frames.length < 2) {
@@ -247,17 +248,47 @@ function App() {
                 <strong>{progress}%</strong>
               </div>
 
-              <input
-                aria-label="Playback progress"
-                max={maxFrameIndex}
-                min={0}
-                onChange={(event) => {
-                  setPlaybackIndex(Number(event.target.value))
-                  setIsPlaying(false)
-                }}
-                type="range"
-                value={frameIndex}
-              />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <button
+                  className="button"
+                  style={{ minHeight: 'auto', padding: '0.45rem 0.6rem' }}
+                  onClick={() => {
+                    setPlaybackIndex(Math.max(0, frameIndex - 1))
+                    setIsPlaying(false)
+                  }}
+                  disabled={frameIndex <= 0}
+                  type="button"
+                  title="Previous Step"
+                >
+                  ◀
+                </button>
+                <input
+                  aria-label="Playback progress"
+                  max={maxFrameIndex}
+                  min={0}
+                  step={1}
+                  onChange={(event) => {
+                    setPlaybackIndex(Number(event.target.value))
+                    setIsPlaying(false)
+                  }}
+                  type="range"
+                  value={frameIndex}
+                  style={{ flex: 1 }}
+                />
+                <button
+                  className="button"
+                  style={{ minHeight: 'auto', padding: '0.45rem 0.6rem' }}
+                  onClick={() => {
+                    setPlaybackIndex(Math.min(maxFrameIndex, frameIndex + 1))
+                    setIsPlaying(false)
+                  }}
+                  disabled={frameIndex >= maxFrameIndex}
+                  type="button"
+                  title="Next Step"
+                >
+                  ▶
+                </button>
+              </div>
 
               <div className="actions">
                 <button
@@ -289,6 +320,8 @@ function App() {
               </div>
             </div>
           </div>
+
+
 
           <div className="panel__section panel__section--compact">
             <div className="metric-list">
@@ -334,16 +367,28 @@ function App() {
             </p>
           </header>
 
-          <div className="map-frame">
-            <MapCanvas
-              currentFrame={deferredFrame}
-              goalNode={goalNode}
-              graph={loadState.status === 'ready' ? loadState.graph : null}
-              isLoading={loadState.status === 'loading'}
-              onMapPick={handleMapPick}
-              region={region}
-              startNode={startNode}
-            />
+          <div className="map-frame visualizations-wrap">
+            <div className="map-container">
+              <MapCanvas
+                currentFrame={deferredFrame}
+                goalNode={goalNode}
+                graph={loadState.status === 'ready' ? loadState.graph : null}
+                isLoading={loadState.status === 'loading'}
+                onMapPick={handleMapPick}
+                region={region}
+                startNode={startNode}
+              />
+            </div>
+
+            <div className="tree-container">
+              <TreeCanvas
+                currentFrame={deferredFrame}
+                goalNode={goalNode}
+                graph={loadState.status === 'ready' ? loadState.graph : null}
+                startNode={startNode}
+              />
+            </div>
+
             {loadState.status === 'error' ? (
               <div className="map-notice map-notice--error">{loadState.error}</div>
             ) : null}
