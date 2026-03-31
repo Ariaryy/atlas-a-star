@@ -1,5 +1,4 @@
 import { useMemo } from 'react'
-import ForceGraph2D from 'react-force-graph-2d'
 import type { AStarFrame } from '../lib/aStar'
 import type { GraphNode, RoadGraph } from '../lib/osm'
 
@@ -10,116 +9,234 @@ type TreeCanvasProps = {
   startNode: GraphNode | null
 }
 
+type TreeNode = {
+  id: string
+  x: number
+  y: number
+  group: 'start' | 'goal' | 'path' | 'frontier' | 'closed' | 'discovered'
+  scoreLabel: string
+}
+
+type TreeLink = {
+  sourceX: number
+  sourceY: number
+  targetX: number
+  targetY: number
+  isPath: boolean
+}
+
+const VIEWBOX_WIDTH = 640
+const TOP_PADDING = 54
+const SIDE_PADDING = 42
+const LEVEL_GAP = 82
+
 export function TreeCanvas({ currentFrame, goalNode, graph, startNode }: TreeCanvasProps) {
-  const treeData = useMemo(() => {
+  const treeLayout = useMemo(() => {
     if (!graph || !currentFrame) {
-      return { nodes: [], links: [] }
+      return null
     }
 
-    const discoveredIds = new Set<string>([...currentFrame.closedIds, ...currentFrame.openIds])
-    
-    // Build path set for coloring
+    const discoveredIds = Array.from(new Set<string>([...currentFrame.closedIds, ...currentFrame.openIds]))
+    if (discoveredIds.length === 0) {
+      return null
+    }
+
+    const discoveredSet = new Set(discoveredIds)
     const pathSet = new Set(currentFrame.pathIds)
-    const pathEdges = new Set<string>()
-    if (currentFrame.pathIds.length > 1) {
-      for (let i = 0; i < currentFrame.pathIds.length - 1; i++) {
-        const u = currentFrame.pathIds[i]
-        const v = currentFrame.pathIds[i + 1]
-        pathEdges.add(`${u}-${v}`)
-        pathEdges.add(`${v}-${u}`)
-      }
-    }
-
     const openSet = new Set(currentFrame.openIds)
     const closedSet = new Set(currentFrame.closedIds)
+    const pathEdges = new Set<string>()
 
-    const nodes = Array.from(discoveredIds).map((id) => {
-      let group = 'discovered'
-      if (id === startNode?.id) group = 'start'
-      else if (id === goalNode?.id) group = 'goal'
-      else if (pathSet.has(id)) group = 'path'
-      else if (openSet.has(id)) group = 'frontier'
-      else if (closedSet.has(id)) group = 'closed'
-      
-      const fScore = currentFrame.scores?.[id]?.f
-      return { id, group, fScore }
+    for (let index = 0; index < currentFrame.pathIds.length - 1; index += 1) {
+      const from = currentFrame.pathIds[index]
+      const to = currentFrame.pathIds[index + 1]
+      pathEdges.add(`${from}-${to}`)
+      pathEdges.add(`${to}-${from}`)
+    }
+
+    const depths = new Map<string, number>()
+    const visiting = new Set<string>()
+
+    const getDepth = (nodeId: string): number => {
+      if (depths.has(nodeId)) {
+        return depths.get(nodeId)!
+      }
+
+      if (visiting.has(nodeId)) {
+        return 0
+      }
+
+      visiting.add(nodeId)
+      const parentId = currentFrame.cameFrom[nodeId]
+      const depth =
+        parentId && discoveredSet.has(parentId)
+          ? getDepth(parentId) + 1
+          : nodeId === startNode?.id
+            ? 0
+            : 1
+      visiting.delete(nodeId)
+      depths.set(nodeId, depth)
+      return depth
+    }
+
+    const groupedByDepth = new Map<number, string[]>()
+    for (const nodeId of discoveredIds) {
+      const depth = getDepth(nodeId)
+      const bucket = groupedByDepth.get(depth) ?? []
+      bucket.push(nodeId)
+      groupedByDepth.set(depth, bucket)
+    }
+
+    for (const bucket of groupedByDepth.values()) {
+      bucket.sort((left, right) => {
+        const leftScore = currentFrame.scores[left]?.f ?? Number.POSITIVE_INFINITY
+        const rightScore = currentFrame.scores[right]?.f ?? Number.POSITIVE_INFINITY
+        if (leftScore !== rightScore) {
+          return leftScore - rightScore
+        }
+
+        return left.localeCompare(right)
+      })
+    }
+
+    const maxDepth = Math.max(...groupedByDepth.keys())
+    const viewBoxHeight = Math.max(320, TOP_PADDING * 2 + maxDepth * LEVEL_GAP + 64)
+    const nodes = new Map<string, TreeNode>()
+
+    groupedByDepth.forEach((bucket, depth) => {
+      const availableWidth = VIEWBOX_WIDTH - SIDE_PADDING * 2
+      const slotWidth = bucket.length > 1 ? availableWidth / (bucket.length - 1) : 0
+      const y = TOP_PADDING + depth * LEVEL_GAP
+
+      bucket.forEach((nodeId, index) => {
+        const x =
+          bucket.length === 1
+            ? VIEWBOX_WIDTH / 2
+            : SIDE_PADDING + slotWidth * index
+
+        let group: TreeNode['group'] = 'discovered'
+        if (nodeId === startNode?.id) {
+          group = 'start'
+        } else if (nodeId === goalNode?.id) {
+          group = 'goal'
+        } else if (pathSet.has(nodeId)) {
+          group = 'path'
+        } else if (openSet.has(nodeId)) {
+          group = 'frontier'
+        } else if (closedSet.has(nodeId)) {
+          group = 'closed'
+        }
+
+        const score = currentFrame.scores[nodeId]?.f
+        nodes.set(nodeId, {
+          id: nodeId,
+          x,
+          y,
+          group,
+          scoreLabel:
+            score != null && Number.isFinite(score)
+              ? Math.round(score).toString()
+              : '',
+        })
+      })
     })
 
-    const links: any[] = []
-    
-    // Explicitly draw links forming the cameFrom hierarchy
-    for (const childId of discoveredIds) {
-      const parentId = currentFrame.cameFrom[childId]
-      if (parentId && discoveredIds.has(parentId)) {
-        const isPath = pathEdges.has(`${parentId}-${childId}`)
-        links.push({
-          source: parentId, // Point parent -> child for Top-Down Tree
-          target: childId,
-          isPath,
-        })
+    const links: TreeLink[] = []
+    for (const nodeId of discoveredIds) {
+      const parentId = currentFrame.cameFrom[nodeId]
+      if (!parentId || !discoveredSet.has(parentId)) {
+        continue
       }
+
+      const source = nodes.get(parentId)
+      const target = nodes.get(nodeId)
+      if (!source || !target) {
+        continue
+      }
+
+      links.push({
+        sourceX: source.x,
+        sourceY: source.y,
+        targetX: target.x,
+        targetY: target.y,
+        isPath: pathEdges.has(`${parentId}-${nodeId}`),
+      })
     }
 
-    return { nodes, links }
-  }, [currentFrame, graph, startNode, goalNode])
-
-  const getNodeColor = (node: any) => {
-    switch (node.group) {
-      case 'start': return '#1c8f63'
-      case 'goal': return '#8f3140'
-      case 'path': return '#d95550'
-      case 'frontier': return '#d58d36'
-      case 'closed': return '#355c7d'
-      default: return '#355c7d'
+    return {
+      viewBoxHeight,
+      links,
+      nodes: Array.from(nodes.values()),
     }
-  }
+  }, [currentFrame, goalNode, graph, startNode])
 
-  const getLinkColor = (link: any) => {
-    return link.isPath ? '#d95550' : 'rgba(53, 92, 125, 0.4)'
+  if (!treeLayout) {
+    return (
+      <div className="tree-canvas tree-canvas--empty">
+        Structured tree will build here during playback.
+      </div>
+    )
   }
 
   return (
-    <div style={{ width: '100%', height: '100%', position: 'absolute', inset: 0 }}>
-      {treeData.nodes.length > 0 ? (
-        <ForceGraph2D
-          graphData={treeData}
-          nodeCanvasObject={(node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
-            const hasValidScore = node.fScore != null && node.fScore !== Number.POSITIVE_INFINITY
-            const label = hasValidScore ? Math.round(node.fScore).toString() : ''
-            
-            // Draw circle
-            const radius = 4
-            ctx.beginPath()
-            ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI, false)
-            ctx.fillStyle = getNodeColor(node)
-            ctx.fill()
-            
-            // Draw text adjacent to circle if zoomed in
-            if (label && globalScale > 1.3) {
-              const fontSize = 11 / globalScale
-              ctx.font = `${fontSize}px Sans-Serif`
-              ctx.textAlign = 'center'
-              ctx.textBaseline = 'top'
-              ctx.fillStyle = '#11181c' // Dark ink color
-              ctx.fillText(label, node.x, node.y + radius + (3 / globalScale))
-            }
-          }}
-          linkColor={getLinkColor}
-          linkWidth={(link: any) => (link.isPath ? 3 : 1)}
-          linkDirectionalArrowLength={3.5}
-          linkDirectionalArrowRelPos={1}
-          dagMode="td"
-          dagLevelDistance={40}
-          enableNodeDrag={false}
-          enableZoomInteraction={true}
-          enablePanInteraction={true}
-          cooldownTicks={100}
-        />
-      ) : (
-        <div style={{ display: 'grid', placeItems: 'center', height: '100%', color: 'var(--muted)', fontSize: '0.9rem' }}>
-          Structured tree will build here during playback.
-        </div>
-      )}
+    <div className="tree-canvas">
+      <svg
+        aria-label="A* search tree"
+        className="tree-canvas__svg"
+        preserveAspectRatio="xMidYMin meet"
+        viewBox={`0 0 ${VIEWBOX_WIDTH} ${treeLayout.viewBoxHeight}`}
+      >
+        {treeLayout.links.map((link, index) => (
+          <line
+            key={`link-${index}`}
+            stroke={link.isPath ? '#d95550' : 'rgba(53, 92, 125, 0.35)'}
+            strokeWidth={link.isPath ? 3 : 1.4}
+            x1={link.sourceX}
+            x2={link.targetX}
+            y1={link.sourceY}
+            y2={link.targetY}
+          />
+        ))}
+
+        {treeLayout.nodes.map((node) => (
+          <g key={node.id} transform={`translate(${node.x}, ${node.y})`}>
+            <circle
+              cx={0}
+              cy={0}
+              fill={getNodeColor(node.group)}
+              r={node.group === 'start' || node.group === 'goal' ? 7 : 5}
+            />
+            {node.scoreLabel ? (
+              <text
+                className="tree-canvas__label"
+                dominantBaseline="hanging"
+                textAnchor="middle"
+                x={0}
+                y={10}
+              >
+                {node.scoreLabel}
+              </text>
+            ) : null}
+          </g>
+        ))}
+      </svg>
     </div>
   )
+}
+
+function getNodeColor(group: TreeNode['group']) {
+  switch (group) {
+    case 'start':
+      return '#1c8f63'
+    case 'goal':
+      return '#8f3140'
+    case 'path':
+      return '#d95550'
+    case 'frontier':
+      return '#d58d36'
+    case 'closed':
+      return '#355c7d'
+    default:
+      return '#6f8799'
+  }
 }

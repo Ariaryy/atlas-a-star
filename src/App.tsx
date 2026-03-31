@@ -103,7 +103,7 @@ function App() {
 
     const intervalId = window.setInterval(tickPlayback, speed)
     return () => window.clearInterval(intervalId)
-  }, [isPlaying, result, speed])
+  }, [isPlaying, result, speed, tickPlayback])
 
   const handleMapPick = (lat: number, lon: number) => {
     if (loadState.status !== 'ready') {

@@ -71,12 +71,8 @@ export function runAStar(graph: RoadGraph, startId: string, goalId: string): ASt
     openSet.delete(currentId)
     closedSet.add(currentId)
 
-    let neighborsChecked = 0
-    let neighborsAdded = 0
-
     const currentNode = graph.nodes[currentId]
     for (const neighbor of currentNode.neighbors) {
-      neighborsChecked++
       if (closedSet.has(neighbor.to)) {
         continue
       }
@@ -87,7 +83,6 @@ export function runAStar(graph: RoadGraph, startId: string, goalId: string): ASt
         continue
       }
 
-      neighborsAdded++
       cameFrom.set(neighbor.to, currentId)
       gScore.set(neighbor.to, tentativeScore)
       fScore.set(neighbor.to, tentativeScore + estimate(graph, neighbor.to, goalId))
